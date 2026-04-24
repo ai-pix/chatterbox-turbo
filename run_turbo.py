@@ -85,25 +85,31 @@ def generate(
     if seed_num != 0:
         set_seed(int(seed_num))
 
+    if audio_prompt_path:
+        print(f"Preparing conditionals for audio prompt: {audio_prompt_path}")
+        MODEL.prepare_conditionals(audio_prompt_path, norm_loudness=norm_loudness)
+
     chunks = chunk_text(text, max_chars=250)
     
     if not chunks:
         return (MODEL.sr, np.array([]))
 
     all_wavs = []
-    for chunk in chunks:
-        wav = MODEL.generate(
-            chunk,
-            audio_prompt_path=audio_prompt_path,
-            temperature=temperature,
-            min_p=min_p,
-            top_p=top_p,
-            top_k=int(top_k),
-            repetition_penalty=repetition_penalty,
-            norm_loudness=norm_loudness,
-        )
-        all_wavs.append(wav.squeeze(0).numpy())
-        
+    
+    with torch.inference_mode():
+        for chunk in chunks:
+            wav = MODEL.generate(
+                chunk,
+                audio_prompt_path=None, # Already prepared above
+                temperature=temperature,
+                min_p=min_p,
+                top_p=top_p,
+                top_k=int(top_k),
+                repetition_penalty=repetition_penalty,
+                norm_loudness=norm_loudness,
+            )
+            all_wavs.append(wav.squeeze(0).numpy())
+            
     combined_wav = np.concatenate(all_wavs)
     return (MODEL.sr, combined_wav)
 

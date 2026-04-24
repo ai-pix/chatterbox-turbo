@@ -267,11 +267,12 @@ def generate_tts_audio(
         "temperature": temperature_input,
         "cfg_weight": cfgw_input,
     }
+    
     if chosen_prompt:
-        generate_kwargs["audio_prompt_path"] = chosen_prompt
-        print(f"Using audio prompt: {chosen_prompt}")
+        print(f"Preparing voice conditionally from prompt: {chosen_prompt}")
+        current_model.prepare_conditionals(chosen_prompt, exaggeration=exaggeration_input)
     else:
-        print("No audio prompt provided; using default voice.")
+        print("No audio prompt provided; using default voice if already loaded.")
         
     chunks = chunk_text(text_input, max_chars=250)
     
@@ -279,14 +280,18 @@ def generate_tts_audio(
         return (current_model.sr, np.array([]))
 
     all_wavs = []
-    for chunk in chunks:
-        wav = current_model.generate(
-            chunk,
-            language_id=language_id,
-            **generate_kwargs
-        )
-        all_wavs.append(wav.squeeze(0).numpy())
-        
+    
+    # Wrap in inference_mode for faster loop execution
+    with torch.inference_mode():
+        for chunk in chunks:
+            wav = current_model.generate(
+                chunk,
+                language_id=language_id,
+                audio_prompt_path=None, # Already prepared above
+                **generate_kwargs
+            )
+            all_wavs.append(wav.squeeze(0).numpy())
+            
     combined_wav = np.concatenate(all_wavs)
     print("Audio generation complete.")
     return (current_model.sr, combined_wav)
