@@ -1,8 +1,53 @@
 import random
 import numpy as np
 import torch
+import re
 from chatterbox.mtl_tts import ChatterboxMultilingualTTS, SUPPORTED_LANGUAGES
 import gradio as gr
+
+def chunk_text(text, max_chars=250):
+    paragraphs = text.split('\n')
+    chunks = []
+    
+    for para in paragraphs:
+        para = para.strip()
+        if not para:
+            continue
+            
+        sentences = re.split(r'(?<=[.!?])\s+', para)
+        
+        current_chunk = ""
+        for sentence in sentences:
+            if len(current_chunk) + len(sentence) + 1 <= max_chars:
+                current_chunk += (" " + sentence if current_chunk else sentence)
+            else:
+                if current_chunk:
+                    chunks.append(current_chunk.strip())
+                
+                if len(sentence) > max_chars:
+                    sub_parts = re.split(r'(?<=[,;])\s+', sentence)
+                    sub_chunk = ""
+                    for part in sub_parts:
+                        if len(sub_chunk) + len(part) + 1 <= max_chars:
+                            sub_chunk += (" " + part if sub_chunk else part)
+                        else:
+                            if sub_chunk:
+                                chunks.append(sub_chunk.strip())
+                            if len(part) > max_chars:
+                                for i in range(0, len(part), max_chars):
+                                    chunks.append(part[i:i+max_chars])
+                                sub_chunk = ""
+                            else:
+                                sub_chunk = part
+                    if sub_chunk:
+                        current_chunk = sub_chunk
+                else:
+                    current_chunk = sentence
+                    
+        if current_chunk:
+            chunks.append(current_chunk.strip())
+            
+    return chunks
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"🚀 Running on device: {DEVICE}")
@@ -228,13 +273,23 @@ def generate_tts_audio(
     else:
         print("No audio prompt provided; using default voice.")
         
-    wav = current_model.generate(
-        text_input[:300],  # Truncate text to max chars
-        language_id=language_id,
-        **generate_kwargs
-    )
+    chunks = chunk_text(text_input, max_chars=250)
+    
+    if not chunks:
+        return (current_model.sr, np.array([]))
+
+    all_wavs = []
+    for chunk in chunks:
+        wav = current_model.generate(
+            chunk,
+            language_id=language_id,
+            **generate_kwargs
+        )
+        all_wavs.append(wav.squeeze(0).numpy())
+        
+    combined_wav = np.concatenate(all_wavs)
     print("Audio generation complete.")
-    return (current_model.sr, wav.squeeze(0).numpy())
+    return (current_model.sr, combined_wav)
 
 with gr.Blocks() as demo:
     gr.Markdown(
@@ -251,7 +306,7 @@ with gr.Blocks() as demo:
             initial_lang = "fr"
             text = gr.Textbox(
                 value=default_text_for_ui(initial_lang),
-                label="Text to synthesize (max chars 300)",
+                label="Text to synthesize (unlimited length supported via auto-chunking)",
                 max_lines=5
             )
             
