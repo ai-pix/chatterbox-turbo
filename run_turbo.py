@@ -25,6 +25,52 @@ MODEL = ChatterboxTurboTTS.from_pretrained(DEVICE)
 print("Model loaded!")
 
 
+import re
+
+def chunk_text(text, max_chars=250):
+    paragraphs = text.split('\n')
+    chunks = []
+    
+    for para in paragraphs:
+        para = para.strip()
+        if not para:
+            continue
+            
+        sentences = re.split(r'(?<=[.!?])\s+', para)
+        
+        current_chunk = ""
+        for sentence in sentences:
+            if len(current_chunk) + len(sentence) + 1 <= max_chars:
+                current_chunk += (" " + sentence if current_chunk else sentence)
+            else:
+                if current_chunk:
+                    chunks.append(current_chunk.strip())
+                
+                if len(sentence) > max_chars:
+                    sub_parts = re.split(r'(?<=[,;])\s+', sentence)
+                    sub_chunk = ""
+                    for part in sub_parts:
+                        if len(sub_chunk) + len(part) + 1 <= max_chars:
+                            sub_chunk += (" " + part if sub_chunk else part)
+                        else:
+                            if sub_chunk:
+                                chunks.append(sub_chunk.strip())
+                            if len(part) > max_chars:
+                                for i in range(0, len(part), max_chars):
+                                    chunks.append(part[i:i+max_chars])
+                                sub_chunk = ""
+                            else:
+                                sub_chunk = part
+                    if sub_chunk:
+                        current_chunk = sub_chunk
+                else:
+                    current_chunk = sentence
+                    
+        if current_chunk:
+            chunks.append(current_chunk.strip())
+            
+    return chunks
+
 def generate(
         text,
         audio_prompt_path,
@@ -39,17 +85,27 @@ def generate(
     if seed_num != 0:
         set_seed(int(seed_num))
 
-    wav = MODEL.generate(
-        text,
-        audio_prompt_path=audio_prompt_path,
-        temperature=temperature,
-        min_p=min_p,
-        top_p=top_p,
-        top_k=int(top_k),
-        repetition_penalty=repetition_penalty,
-        norm_loudness=norm_loudness,
-    )
-    return (MODEL.sr, wav.squeeze(0).numpy())
+    chunks = chunk_text(text, max_chars=250)
+    
+    if not chunks:
+        return (MODEL.sr, np.array([]))
+
+    all_wavs = []
+    for chunk in chunks:
+        wav = MODEL.generate(
+            chunk,
+            audio_prompt_path=audio_prompt_path,
+            temperature=temperature,
+            min_p=min_p,
+            top_p=top_p,
+            top_k=int(top_k),
+            repetition_penalty=repetition_penalty,
+            norm_loudness=norm_loudness,
+        )
+        all_wavs.append(wav.squeeze(0).numpy())
+        
+    combined_wav = np.concatenate(all_wavs)
+    return (MODEL.sr, combined_wav)
 
 
 with gr.Blocks(title="Chatterbox Turbo") as demo:
@@ -59,7 +115,7 @@ with gr.Blocks(title="Chatterbox Turbo") as demo:
         with gr.Column():
             text = gr.Textbox(
                 value="Oh, that's hilarious! [chuckle] Um anyway, we do have a new model in store. It's the SkyNet T-800 series and it's got basically everything. Including AI integration with ChatGPT and um all that jazz. Would you like me to get some prices for you?",
-                label="Text to synthesize (max chars 300)",
+                label="Text to synthesize (unlimited length supported via auto-chunking)",
                 max_lines=5,
                 elem_id="main_textbox"
             )
